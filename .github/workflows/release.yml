@@ -21,14 +21,6 @@ jobs:
             runner: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             binary: wctx
-          - name: linux-arm64
-            runner: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-            binary: wctx
-          - name: linux-armv7
-            runner: ubuntu-latest
-            target: armv7-unknown-linux-gnueabihf
-            binary: wctx
           - name: linux-i686
             runner: ubuntu-latest
             target: i686-unknown-linux-gnu
@@ -61,17 +53,15 @@ jobs:
       - name: Add target
         run: rustup target add ${{ matrix.platform.target }}
 
-      - name: Install cross compile dependencies (Linux)
-        if: startsWith(matrix.platform.name, 'linux-')
+      - name: Install cross compile dependencies (Linux i686)
+        if: matrix.platform.name == 'linux-i686'
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf gcc-i686-linux-gnu
+          sudo apt-get install -y gcc-i686-linux-gnu
 
-      - name: Set cross compile env
-        if: startsWith(matrix.platform.target, 'aarch64') || startsWith(matrix.platform.target, 'armv7') || startsWith(matrix.platform.target, 'i686')
+      - name: Set cross compile env (Linux i686)
+        if: matrix.platform.name == 'linux-i686'
         run: |
-          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
-          echo "CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc" >> $GITHUB_ENV
           echo "CARGO_TARGET_I686_UNKNOWN_LINUX_GNU_LINKER=i686-linux-gnu-gcc" >> $GITHUB_ENV
 
       - name: Build release
@@ -114,8 +104,6 @@ jobs:
             Automated release build for multiple platforms
           files: |
             artifacts/*-linux-x64/*
-            artifacts/*-linux-arm64/*
-            artifacts/*-linux-armv7/*
             artifacts/*-linux-i686/*
             artifacts/*-macos-x64/*
             artifacts/*-macos-arm64/*
