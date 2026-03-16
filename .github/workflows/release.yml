@@ -78,7 +78,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.platform.binary }}-${{ matrix.platform.name }}
+          name: ${{ matrix.platform.name }}
           path: |
             target/${{ matrix.platform.target }}/release/${{ matrix.platform.binary }}
             sha256_${{ matrix.platform.name }}.txt
@@ -96,6 +96,9 @@ jobs:
         with:
           path: artifacts
 
+      - name: List artifacts
+        run: find artifacts -type f
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
@@ -103,11 +106,8 @@ jobs:
             ## Changes
             Automated release build for multiple platforms
           files: |
-            artifacts/*-linux-x64/*
-            artifacts/*-linux-i686/*
-            artifacts/*-macos-x64/*
-            artifacts/*-macos-arm64/*
-            artifacts/*-windows-x64/*
-            artifacts/*-windows-arm64/*
+            artifacts/**/wctx
+            artifacts/**/wctx.exe
+            artifacts/**/sha256*.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
