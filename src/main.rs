@@ -1,0 +1,243 @@
+use anyhow::{Context, Result};
+use clap::Parser;
+use colored::Colorize;
+
+mod cli;
+mod commands;
+mod config;
+mod git;
+mod scanner;
+
+use cli::{Cli, Commands, RegistryCommands, ScanArgs};
+use config::Config;
+use git::GitRepo;
+use scanner::{scan_project, scan_to_json, scan_to_architecture_markdown};
+
+fn main() -> Result<()> {
+    let args = Cli::parse();
+
+    // Initialize colored output for Windows
+    #[cfg(windows)]
+    colored::control::set_virtual_terminal(true).ok();
+
+    // Determine repository path
+    let repo_path = if std::env::args().any(|arg| arg == "-r" || arg == "--repo") {
+        args.repo.clone()
+    } else {
+        ".".to_string()
+    };
+
+    // Open or initialize Git repository
+    let repo = if git::GitRepo::is_valid(&repo_path) {
+        GitRepo::open(&repo_path).context("Failed to open Git repository")?
+    } else {
+        println!("{} Initializing new Git repository...", "→".yellow());
+        git::init_repo(&repo_path).context("Failed to initialize Git repository")?
+    };
+
+    if args.verbose {
+        println!("{} Working in: {}", "→".dimmed(), repo_path.cyan());
+    }
+
+    // Execute command
+    match args.command {
+        Commands::Init => {
+            commands::registry::init(&repo)?;
+        }
+
+        Commands::Registry(registry_cmd) => match registry_cmd {
+            RegistryCommands::New { description } => {
+                commands::registry::create_version(&repo, description.as_deref())?;
+            }
+            RegistryCommands::Category { name, description } => {
+                commands::registry::create_category(&repo, &name, description.as_deref())?;
+            }
+            RegistryCommands::TechStack { name, description } => {
+                commands::registry::create_tech_stack(&repo, &name, description.as_deref())?;
+            }
+            RegistryCommands::Module { path, description } => {
+                commands::registry::create_module(&repo, &path, description.as_deref())?;
+            }
+            RegistryCommands::Validation { name, description } => {
+                commands::registry::create_validation(&repo, &name, description.as_deref())?;
+            }
+            RegistryCommands::Permission { name, description } => {
+                commands::registry::create_permission(&repo, &name, description.as_deref())?;
+            }
+            RegistryCommands::Auth { name, description } => {
+                commands::registry::create_auth(&repo, &name, description.as_deref())?;
+            }
+            RegistryCommands::Cors { name, description } => {
+                commands::registry::create_cors(&repo, &name, description.as_deref())?;
+            }
+        },
+
+        Commands::Show(args) => {
+            commands::show::execute(&repo, &args.path)?;
+        }
+
+        Commands::Update(args) => {
+            commands::update::execute(&repo, &args.path, &args.update)?;
+        }
+
+        Commands::Scan(args) => {
+            handle_scan_command(args)?;
+        }
+
+        Commands::Generate(args) => {
+            commands::generate::execute(&repo, args.version, &args.format)?;
+        }
+
+        Commands::Config {
+            repo,
+            name,
+            email,
+            lang,
+            show,
+            reset,
+        } => {
+            handle_config_command(
+                repo.clone(),
+                name.clone(),
+                email.clone(),
+                lang.clone(),
+                show,
+                reset,
+            )?;
+        }
+
+        Commands::Mount { path } => {
+            let mount_repo = GitRepo::open(&path).context("Failed to open Git repository")?;
+            commands::registry::mount_repo(&mount_repo, &path)?;
+        }
+
+        Commands::Check { path } => {
+            let check_path = path.unwrap_or_else(|| ".".to_string());
+            let check_repo = GitRepo::open(&check_path).context("Failed to open Git repository")?;
+            commands::registry::check_repo(&check_repo, &check_path)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Handle the config command
+fn handle_config_command(
+    repo: Option<String>,
+    name: Option<String>,
+    email: Option<String>,
+    lang: Option<String>,
+    show: bool,
+    reset: bool,
+) -> Result<()> {
+    if reset {
+        let config = Config {
+            first_run: true,
+            ..Default::default()
+        };
+        config.save()?;
+        println!("{} Configuration reset to defaults.", "✓".green().bold());
+        println!("  Run any command to re-run the setup wizard.");
+        return Ok(());
+    }
+
+    if show {
+        let config = Config::load()?;
+        println!("{}", "Current Configuration:".cyan().bold());
+        println!();
+        println!("  Repository path: {}", config.get_repo_path().cyan());
+        println!(
+            "  User name:       {}",
+            config.user_name.as_deref().unwrap_or("Not set").cyan()
+        );
+        println!(
+            "  User email:      {}",
+            config.user_email.as_deref().unwrap_or("Not set").cyan()
+        );
+        println!(
+            "  Language:        {}",
+            config.user_language.as_deref().unwrap_or("zh").cyan()
+        );
+        println!(
+            "  First run:       {}",
+            if config.is_first_run() {
+                "Yes".yellow()
+            } else {
+                "No".green()
+            }
+        );
+        return Ok(());
+    }
+
+    let mut config = Config::load()?;
+    let mut updated = false;
+
+    if let Some(repo_path) = repo {
+        config.set_repo_path(repo_path);
+        updated = true;
+    }
+
+    if let Some(user_name) = name {
+        config.user_name = Some(user_name);
+        updated = true;
+    }
+
+    if let Some(user_email) = email {
+        config.user_email = Some(user_email);
+        updated = true;
+    }
+
+    if let Some(language) = lang {
+        config.user_language = Some(language);
+        updated = true;
+    }
+
+    if updated {
+        config.save()?;
+        println!("{} Configuration updated.", "✓".green().bold());
+    } else {
+        println!("{}", "Configuration Management".cyan().bold());
+        println!();
+        println!("Usage:");
+        println!("  wctx config [OPTIONS]");
+        println!();
+        println!("Options:");
+        println!("  -r, --repo <PATH>    Set the repository path");
+        println!("  -n, --name <NAME>    Set user name for Git commits");
+        println!("  -e, --email <EMAIL>  Set user email for Git commits");
+        println!("  -l, --lang <LANG>    Set language (zh/en)");
+        println!("      --show           Display current configuration");
+        println!("      --reset          Reset configuration to defaults");
+    }
+
+    Ok(())
+}
+
+/// Handle the scan command
+fn handle_scan_command(args: ScanArgs) -> Result<()> {
+    let scan_path = args.path.unwrap_or_else(|| ".".to_string());
+
+    println!("{} Scanning project: {}", "→".yellow(), scan_path.cyan());
+    println!();
+
+    let result = scan_project(&scan_path)?;
+
+    // Print as JSON
+    println!("{}", scan_to_json(&result));
+
+    // If output is specified, create a context entry
+    if let Some(output) = args.output {
+        let _version = commands::registry::get_latest_version(&GitRepo::open(&scan_path)?)?
+            .unwrap_or_else(|| "v1".to_string());
+
+        println!("\n{} To add this to context, run:", "→".yellow());
+        println!("  wctx registry tech-stack {} --description 'Auto-scanned'", output);
+
+        // Generate architecture markdown
+        let arch_md = scan_to_architecture_markdown(&result);
+        println!("\n{}", "Architecture Markdown:".cyan().bold());
+        println!("{}", arch_md);
+    }
+
+    Ok(())
+}
