@@ -10,8 +10,28 @@ permissions:
 
 jobs:
   release:
-    name: Release ${{ github.ref_name }}
-    runs-on: ubuntu-latest
+    name: Release ${{ matrix.platform.name }}
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - name: linux-x64
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary: wctx
+          - name: macos-x64
+            runner: macos-latest
+            target: x86_64-apple-darwin
+            binary: wctx
+          - name: macos-arm64
+            runner: macos-latest
+            target: aarch64-apple-darwin
+            binary: wctx
+          - name: windows-x64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: wctx.exe
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -19,23 +39,51 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Add target
+        run: rustup target add ${{ matrix.platform.target }}
+
       - name: Build release
-        run: |
-          cargo build --release
-          strip target/release/wctx
+        run: cargo build --release --target ${{ matrix.platform.target }}
+
+      - name: Strip binary (Linux/macOS)
+        if: matrix.platform.name != 'windows-x64'
+        run: strip target/${{ matrix.platform.target }}/release/${{ matrix.platform.binary }}
 
       - name: Create checksums
         run: |
-          sha256sum target/release/wctx > sha256.txt
+          sha256sum target/${{ matrix.platform.target }}/release/${{ matrix.platform.binary }} > sha256_${{ matrix.platform.name }}.txt
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform.binary }}-${{ matrix.platform.name }}
+          path: |
+            target/${{ matrix.platform.target }}/release/${{ matrix.platform.binary }}
+            sha256_${{ matrix.platform.name }}.txt
+
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: release
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
           body: |
             ## Changes
-            Automated release build
+            Automated release build for multiple platforms
           files: |
-            target/release/wctx
-            sha256.txt
+            artifacts/*-linux-x64/*
+            artifacts/*-macos-x64/*
+            artifacts/*-macos-arm64/*
+            artifacts/*-windows-x64/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
